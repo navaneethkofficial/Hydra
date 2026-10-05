@@ -1,0 +1,240 @@
+// Hydra — hydration habit companion
+// Schema is intentionally narrow: every field earns its place by making it
+// easier for someone to consistently drink water.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Identity
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String    @id @default(cuid())
+  name         String
+  email        String    @unique
+  passwordHash String?
+  image        String?
+  /// IANA timezone, e.g. "Europe/Berlin". Day boundaries are computed with it.
+  timezone     String    @default("UTC")
+  theme        Theme     @default(SYSTEM)
+  onboardedAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  profile          HydrationProfile?
+  reminderSettings ReminderSettings?
+  waterLogs        WaterLog[]
+  dailySummaries   DailySummary[]
+  sessions         Session[]
+  accounts         OAuthAccount[]
+  resetTokens      PasswordResetToken[]
+  pushSubs         PushSubscription[]
+
+  @@index([email])
+  @@map("users")
+}
+
+/// Server-side sessions so a login can be revoked (logout, password reset,
+/// account deletion). Only the SHA-256 of the token is stored.
+model Session {
+  id         String   @id @default(cuid())
+  userId     String
+  tokenHash  String   @unique
+  userAgent  String?
+  ip         String?
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model OAuthAccount {
+  id                String  @id @default(cuid())
+  userId            String
+  provider          String
+  providerAccountId String
+  createdAt         DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+  @@map("oauth_accounts")
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}
+
+// ---------------------------------------------------------------------------
+// Hydration
+// ---------------------------------------------------------------------------
+
+/// Everything needed to derive a personal daily target and a sensible pace.
+/// All volumes are stored in millilitres; `unit` only affects presentation.
+model HydrationProfile {
+  id             String        @id @default(cuid())
+  userId         String        @unique
+  weightKg       Float?
+  activityLevel  ActivityLevel @default(MODERATE)
+  climate        Climate       @default(TEMPERATE)
+  /// Daily target in millilitres.
+  dailyGoal      Int           @default(2500)
+  /// Whether `dailyGoal` was set by hand (we then stop re-suggesting it).
+  goalIsCustom   Boolean       @default(false)
+  /// Local "HH:mm" — the awake window that reminders and pacing live inside.
+  wakeTime       String        @default("07:00")
+  sleepTime      String        @default("23:00")
+  unit           Unit          @default(ML)
+  /// Serving used by the primary one-tap button, in millilitres.
+  defaultServing Int           @default(250)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("hydration_profiles")
+}
+
+model ReminderSettings {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  enabled         Boolean  @default(true)
+  /// Baseline minutes between nudges; the engine tightens or relaxes it.
+  interval        Int      @default(60)
+  /// Local "HH:mm" bounds for nudges (defaults follow the awake window).
+  startTime       String   @default("08:00")
+  endTime         String   @default("22:00")
+  quietHoursStart String   @default("22:00")
+  quietHoursEnd   String   @default("07:00")
+  /// Let the engine shift timing based on the user's own drinking pattern.
+  adaptive        Boolean  @default(true)
+  /// Play an audible alert alongside the notification.
+  soundEnabled    Boolean  @default(true)
+  /// How long the alert sounds, counted in beeps — the alarm-clock dial.
+  soundBeeps      Int      @default(10)
+  /// Which alert tone to play; see ALERT_TONES in lib/domain/alert.ts.
+  soundTone       String   @default("classic")
+  /// Buzz along with the beeps, where the device supports it.
+  vibrationEnabled Boolean @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("reminder_settings")
+}
+
+model WaterLog {
+  id       String    @id @default(cuid())
+  userId   String
+  /// Millilitres.
+  amount   Int
+  loggedAt DateTime  @default(now())
+  /// Local calendar day "YYYY-MM-DD" resolved in the user's timezone at write
+  /// time, so day rollups never drift for travellers or DST.
+  dayKey   String
+  source   LogSource @default(QUICK_ADD)
+  /// Client-generated id used to make offline replays idempotent.
+  clientId String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, clientId])
+  @@index([userId, dayKey])
+  @@index([userId, loggedAt])
+  @@map("water_logs")
+}
+
+/// Denormalised per-day rollup. Kept in sync on every write so history,
+/// streaks and insights are a single indexed read instead of a scan.
+model DailySummary {
+  id            String   @id @default(cuid())
+  userId        String
+  /// Local calendar day "YYYY-MM-DD".
+  date          String
+  totalAmount   Int      @default(0)
+  goal          Int
+  /// 0-100, capped — progress never renders above a full day.
+  percentage    Int      @default(0)
+  goalCompleted Boolean  @default(false)
+  logCount      Int      @default(0)
+  firstLogAt    DateTime?
+  lastLogAt     DateTime?
+  updatedAt     DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([userId, date])
+  @@map("daily_summaries")
+}
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  endpoint  String   @unique
+  p256dh    String
+  auth      String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("push_subscriptions")
+}
+
+// ---------------------------------------------------------------------------
+
+enum ActivityLevel {
+  LOW
+  MODERATE
+  ACTIVE
+  VERY_ACTIVE
+}
+
+enum Climate {
+  TEMPERATE
+  WARM
+  HOT
+}
+
+enum Unit {
+  ML
+  OZ
+}
+
+enum LogSource {
+  MANUAL
+  REMINDER
+  QUICK_ADD
+}
+
+enum Theme {
+  LIGHT
+  DARK
+  SYSTEM
+}

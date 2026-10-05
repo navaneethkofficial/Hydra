@@ -1,0 +1,20 @@
+<!--
+  Maskable variant of icon.svg, for launchers that crop icons to a circle,
+  squircle or rounded square (Android adaptive icons and others).
+
+  - Full-bleed square background: no rounded corners or transparency, so no
+    shape of mask can reveal empty corners.
+  - The drop is scaled to 85% around its own centre (256, 263). Its farthest
+    point then sits about 151px from the centre, about 74% of the 204.8px
+    safe-zone radius (the central circle of 80% diameter that every mask
+    keeps), which leaves visible padding even under the tightest circle mask.
+
+  PNGs are rendered from this file by scripts/render-icons.mjs.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Hydra">
+  <rect width="512" height="512" fill="#1B8FD2"/>
+  <g transform="translate(256 263) scale(0.85) translate(-256 -263)">
+    <path d="M256 92c72 83 128 149 128 214a128 128 0 1 1-256 0c0-65 56-131 128-214Z" fill="#FFFFFF" fill-opacity="0.94"/>
+    <path d="M200 316a58 58 0 0 0 51 56" fill="none" stroke="#1B8FD2" stroke-width="22" stroke-linecap="round"/>
+  </g>
+</svg>

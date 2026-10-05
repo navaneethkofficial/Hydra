@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Hydra">
+  <rect width="512" height="512" rx="112" fill="#1B8FD2"/>
+  <path d="M256 92c72 83 128 149 128 214a128 128 0 1 1-256 0c0-65 56-131 128-214Z" fill="#FFFFFF" fill-opacity="0.94"/>
+  <path d="M200 316a58 58 0 0 0 51 56" fill="none" stroke="#1B8FD2" stroke-width="22" stroke-linecap="round"/>
+</svg>
