@@ -4,6 +4,7 @@ import { Inter } from "next/font/google";
 import { ThemeProvider } from "@/components/layout/theme-provider";
 import { Toaster } from "@/components/ui/toaster";
 import { ServiceWorkerRegistrar } from "@/components/layout/service-worker-registrar";
+import { env } from "@/server/env";
 
 import "./globals.css";
 
@@ -18,7 +19,7 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.APP_URL ?? "http://localhost:3000"),
+  metadataBase: new URL(env.appUrl),
   title: {
     default: "Hydra — Drink water. Without having to remember.",
     template: "%s · Hydra",

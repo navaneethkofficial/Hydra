@@ -37,6 +37,7 @@ openssl rand -base64 32
 |---|---|
 | `npm run dev` | Development server |
 | `npm run build` / `npm start` | Production build and server |
+| `npm run vercel-build` | What Vercel runs: generate the client, apply pending migrations, build |
 | `npm test` | Unit tests for the domain, validation, cookie policy and auth client (`node --test`, no database needed) |
 | `npm run test:e2e` | Browser checks of the sign-in flow against a running app (see [End-to-end tests](#end-to-end-tests)) |
 | `npm run typecheck` | `tsc --noEmit` |
@@ -224,7 +225,8 @@ user back to the sign-in page without a word.
 - Forms post with `method="post"` and keep their submit button disabled until
   the page has hydrated, so credentials can never be sent as URL parameters
 - Zod validation on every request body and query
-- Fixed-window rate limiting on auth, password reset and writes
+- Fixed-window rate limiting on auth, password reset and writes, shared across
+  instances through Upstash Redis when configured
 - Every hydration query scoped by `userId` in the repository layer
 - Single-use, hashed, 30-minute password reset tokens
 - Google sign-in verifies OAuth `state` and refuses unverified email addresses
@@ -264,7 +266,9 @@ benefit has been explained.
 |---|---|
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Shows and enables "Continue with Google" |
 | `NEXT_PUBLIC_VAPID_PUBLIC_KEY` | Registers a Web Push subscription after permission is granted |
-| `APP_URL` | Base URL used for OAuth redirects and reset links |
+| `APP_URL` | Base URL used for OAuth redirects and reset links. On Vercel it defaults to the project's production domain |
+| `DIRECT_URL` | Direct (non-pooled) database URL for migrations. Defaults to `DATABASE_URL` |
+| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | Shared rate-limit counters (`KV_REST_API_URL` / `KV_REST_API_TOKEN` also accepted). Without them, limits are counted per process |
 | `AUTH_COOKIE_SECURE` | `auto` (default), `always` or `never` (`true`/`false` also accepted). Controls the `Secure` attribute on auth cookies, as below |
 
 ### `AUTH_COOKIE_SECURE`
@@ -285,6 +289,74 @@ can't tell. An unrecognised value stops the server at boot.
 
 Reminders work without either: while a tab is open, the client schedules them
 from the same engine the server uses.
+
+---
+
+## Deploying to Vercel
+
+Pages and API routes deploy together as one project: the API routes run as
+serverless functions. The free Hobby plan allows personal, non-commercial use.
+
+### 1. Database
+
+Vercel doesn't host Postgres. Add **Neon** from the Vercel Marketplace (or use
+Supabase). You need two connection strings:
+
+| Variable | Value | Why |
+|---|---|---|
+| `DATABASE_URL` | The **pooled** string (Neon: host contains `-pooler`) | Every function instance opens its own connections; the pooler keeps that within the database's limit |
+| `DIRECT_URL` | The **direct** string | Migrations need a session the pooler can't provide |
+
+Neon's integration names its variables differently. Map them to these two, or
+set them by hand.
+
+### 2. Environment variables
+
+In Project → Settings → Environment Variables:
+
+- `DATABASE_URL`, `DIRECT_URL`: as above.
+- `AUTH_SECRET`: `openssl rand -base64 32`. The server refuses to start in
+  production with fewer than 32 characters.
+- `APP_URL`: optional. It defaults to `https://<VERCEL_PROJECT_PRODUCTION_URL>`;
+  set it once you attach a custom domain.
+- `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN`: optional but
+  recommended (see below). Adding Upstash from the Marketplace sets
+  `KV_REST_API_URL` / `KV_REST_API_TOKEN`, which work as-is.
+- `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`: optional. Add
+  `https://<your-domain>/api/auth/google/callback` as an authorised redirect URI
+  in the Google console.
+
+Leave `AUTH_COOKIE_SECURE` unset. Vercel serves over HTTPS, so auth cookies are
+`Secure` automatically.
+
+### 3. Deploy
+
+Import the repository. No `vercel.json` is needed: Vercel detects Next.js and
+runs `npm run vercel-build`, which generates the Prisma client, applies pending
+migrations with `prisma migrate deploy`, and builds. `npm run build` stays
+database-free for local and CI builds.
+
+**Preview deployments migrate whatever `DIRECT_URL` points at.** If previews
+share production's variables, a branch with a new migration changes the
+production schema before it's merged. Scope the database variables to
+Production only, or give Preview its own database (Neon's integration can
+create a branch per preview).
+
+### Rate limiting on serverless
+
+Each function instance has its own memory and loses it when it shuts down, so
+in-memory counters can only slow an attacker down. With Upstash configured,
+every instance counts in one shared Redis over its REST API (plain `fetch`, no
+SDK). If Redis errors or takes longer than a second, that request falls back to
+the in-memory counters and logs `[rate-limit] shared store unavailable`, so an
+outage never blocks sign-in.
+
+### Still to do for production
+
+Password reset links are only logged in development and aren't emailed
+anywhere (see `requestPasswordReset` in `server/services/auth.service.ts`).
+Until a mail provider such as Resend is wired in, "Forgot password" can't
+deliver a link in production.
 
 ---
 

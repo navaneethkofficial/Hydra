@@ -1,21 +1,17 @@
 import "server-only";
 
+import { env } from "@/server/env";
+import { FallbackStore, MemoryStore, UpstashStore, type RateLimitStore } from "./rate-limit-store";
+
 /**
- * Fixed-window rate limiting, in process memory.
+ * Fixed-window rate limiting.
  *
- * Deliberately dependency-free: it protects the endpoints that matter (auth,
- * password reset, write bursts) on a single instance. Behind more than one
- * instance this is where a shared Redis counter would slot in — the call sites
- * would not change.
+ * Protects the endpoints that matter (auth, password reset, write bursts).
+ * Counters live in Upstash Redis when it's configured, which is what makes
+ * limits hold across serverless instances (Vercel), and in process memory
+ * otherwise, which is right for a single server and local development. See
+ * `rate-limit-store.ts` for the stores; call sites never see the difference.
  */
-
-interface Bucket {
-  count: number;
-  resetAt: number;
-}
-
-const buckets = new Map<string, Bucket>();
-const MAX_TRACKED_KEYS = 10_000;
 
 export interface RateLimitRule {
   /** Requests allowed per window. */
@@ -31,26 +27,6 @@ export interface RateLimitResult {
   retryAfter: number;
 }
 
-export function checkRateLimit(key: string, rule: RateLimitRule): RateLimitResult {
-  const now = Date.now();
-  const existing = buckets.get(key);
-
-  if (!existing || existing.resetAt <= now) {
-    if (buckets.size >= MAX_TRACKED_KEYS) evictExpired(now);
-    buckets.set(key, { count: 1, resetAt: now + rule.windowSeconds * 1000 });
-    return { allowed: true, remaining: rule.limit - 1, retryAfter: rule.windowSeconds };
-  }
-
-  existing.count += 1;
-  const retryAfter = Math.max(1, Math.ceil((existing.resetAt - now) / 1000));
-
-  return {
-    allowed: existing.count <= rule.limit,
-    remaining: Math.max(0, rule.limit - existing.count),
-    retryAfter,
-  };
-}
-
 /** Presets, tuned so normal use never notices them. */
 export const RATE_LIMITS = {
   /** Sign-in and registration: slow enough to make guessing pointless. */
@@ -63,13 +39,18 @@ export const RATE_LIMITS = {
   read: { limit: 300, windowSeconds: 60 },
 } as const satisfies Record<string, RateLimitRule>;
 
-function evictExpired(now: number): void {
-  for (const [key, bucket] of buckets) {
-    if (bucket.resetAt <= now) buckets.delete(key);
-  }
-  // Still full of live windows: drop the oldest to bound memory.
-  if (buckets.size >= MAX_TRACKED_KEYS) {
-    const oldest = [...buckets.entries()].sort((a, b) => a[1].resetAt - b[1].resetAt);
-    for (const [key] of oldest.slice(0, Math.ceil(MAX_TRACKED_KEYS / 4))) buckets.delete(key);
-  }
+const store: RateLimitStore = env.upstash
+  ? new FallbackStore(new UpstashStore(env.upstash), new MemoryStore(), (error) =>
+      console.error("[rate-limit] shared store unavailable; using per-instance limits", error),
+    )
+  : new MemoryStore();
+
+export async function checkRateLimit(key: string, rule: RateLimitRule): Promise<RateLimitResult> {
+  const { count, resetAt } = await store.hit(key, rule.windowSeconds);
+
+  return {
+    allowed: count <= rule.limit,
+    remaining: Math.max(0, rule.limit - count),
+    retryAfter: Math.max(1, Math.ceil((resetAt - Date.now()) / 1000)),
+  };
 }

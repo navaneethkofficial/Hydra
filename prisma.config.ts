@@ -14,6 +14,10 @@ try {
   // No .env file: rely on the ambient environment (CI, production).
 }
 
+// Migrations connect through DIRECT_URL (see schema.prisma). Without a pooler,
+// as in local development, it's simply the same database as DATABASE_URL.
+process.env.DIRECT_URL ??= process.env.DATABASE_URL;
+
 export default defineConfig({
   schema: path.join("prisma", "schema.prisma"),
   migrations: {

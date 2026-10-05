@@ -64,7 +64,7 @@ export function defineRoute<TSchema extends ZodType | undefined = undefined>(
       const user = requireAuth ? await getSessionUser() : null;
       if (requireAuth && !user) throw unauthorized();
 
-      applyRateLimit(request, options.rateLimit, user?.id);
+      await applyRateLimit(request, options.rateLimit, user?.id);
 
       const body = options.schema ? await parseBody(request, options.schema) : undefined;
       const params = args?.params ? await args.params : {};
@@ -86,18 +86,18 @@ export function defineRoute<TSchema extends ZodType | undefined = undefined>(
 
 // ---------------------------------------------------------------------------
 
-function applyRateLimit(
+async function applyRateLimit(
   request: NextRequest,
   rule: RouteOptions<ZodType | undefined>["rateLimit"],
   userId?: string,
-): void {
+): Promise<void> {
   if (rule === false) return;
 
   const resolved: RateLimitRule =
     typeof rule === "string" ? RATE_LIMITS[rule] : (rule ?? RATE_LIMITS.read);
   // Signed-in users are limited per account; anonymous callers per IP.
   const identity = userId ?? clientIp(request);
-  const result = checkRateLimit(`${request.nextUrl.pathname}:${identity}`, resolved);
+  const result = await checkRateLimit(`${request.nextUrl.pathname}:${identity}`, resolved);
 
   if (!result.allowed) {
     throw new ApiError("RATE_LIMITED", "That's a lot of requests. Give it a moment and try again.", {

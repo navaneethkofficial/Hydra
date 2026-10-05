@@ -6,9 +6,15 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// `url` is what the app connects through. On serverless hosts (Vercel) use the
+// provider's *pooled* connection string, since every function instance opens
+// its own connections. `directUrl` bypasses the pooler for migrations, which
+// need a session the pooler can't provide. Locally both point at the same
+// database; prisma.config.ts defaults DIRECT_URL to DATABASE_URL.
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 // ---------------------------------------------------------------------------
